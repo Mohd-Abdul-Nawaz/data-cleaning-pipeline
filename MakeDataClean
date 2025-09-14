@@ -1,0 +1,76 @@
+def MakeDataClean(data):
+    # Create a copy of the dataset to avoid modifying original data
+    data_copy = data.copy()
+    numeric_cols = []
+
+    # Convert 'Date' column to datetime format if it exists
+    if 'Date' in data_copy.columns:
+        data_copy['Date'] = pd.to_datetime(data_copy['Date'], dayfirst=True)
+
+    # Detect numeric columns even if they are stored as object
+    for col in data_copy.columns:
+        if data_copy[col].dtype == 'object':
+            num_numeric = pd.to_numeric(data_copy[col], errors='coerce').notnull().sum()
+            tot = len(data_copy[col])
+            
+            # If more than 80% of values can be converted to numeric, treat column as numeric
+            if (num_numeric / tot > 0.8):
+                data_copy[col] = pd.to_numeric(data_copy[col], errors='coerce')
+            else:
+                # Otherwise, clean string by stripping extra spaces
+                data_copy[col] = data_copy[col].str.strip()
+        else:
+            # Keep track of numeric columns
+            numeric_cols.append(col)
+
+    # Remove duplicate rows
+    data_copy.drop_duplicates(inplace=True)
+
+    # Identify columns with missing values
+    null_cols = []
+    for col in data_copy.columns[data_copy.isnull().sum() > 0]:
+        # If nulls are very few (<=5), drop those rows
+        if (data_copy[col].isnull().sum() <= 5):
+            data_copy.dropna(subset=[col], inplace=True)
+        else:
+            # Otherwise, handle later with imputation
+            null_cols.append(col)
+
+    # Identify categorical columns (object type with no nulls)
+    cat_cols = []
+    for col in data_copy.columns:
+        if data_copy[col].dtype == 'object' and data_copy[col].isnull().sum() == 0:
+            cat_cols.append(col)
+
+    # Process columns with missing data
+    for col in null_cols:
+        if data_copy[col].dtype != 'object':
+            # Calculate IQR for outlier detection
+            Q1 = data_copy[col].quantile(0.25)
+            Q3 = data_copy[col].quantile(0.75)
+            IQR = Q3 - Q1
+            lower_bound = Q1 - 1.5 * IQR
+            upper_bound = Q3 + 1.5 * IQR
+
+            # Calculate % of outliers in the column
+            percent = ((data_copy[col] < lower_bound).sum() + (data_copy[col] > upper_bound).sum()) / data_copy.shape[0] * 100
+
+            # Clip outliers to boundary values
+            data_copy[col] = np.clip(data_copy[col], lower_bound, upper_bound)
+
+            # Impute missing values: mean if outliers <2%, median otherwise
+            if (percent < 2):
+                data_copy[col] = data_copy[col].fillna(
+                    value=data_copy.groupby(cat_cols)[col].transform(lambda x: x.fillna(x.mean()))
+                )
+            else:
+                data_copy[col] = data_copy[col].fillna(
+                    value=data_copy.groupby(cat_cols)[col].transform(lambda x: x.fillna(x.median()))
+                )
+        else:
+            # For object columns, impute using mode
+            data_copy[col] = data_copy[col].fillna(
+                value=data_copy.groupby(cat_cols)[col].transform(lambda x: x.fillna(x.mode()))
+            )
+
+    return data_copy
